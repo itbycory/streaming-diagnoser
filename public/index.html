@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stream Diagnoser</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- hls.js for HLS playback with full diagnostic events -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
+  <!-- Chart.js for metrics charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <!-- Chromecast handled server-side via castv2 + mDNS -->
+</head>
+<body>
+  <div class="app">
+
+    <!-- Header -->
+    <header>
+      <div class="logo">
+        <span class="logo-icon">📡</span>
+        <div>
+          <h1>Stream Diagnoser</h1>
+          <p>Paste any livestream URL — we'll diagnose and fix it automatically</p>
+        </div>
+      </div>
+      <div id="network-badge" class="badge badge-neutral">
+        <span class="dot"></span> Checking network...
+      </div>
+    </header>
+
+    <!-- URL Input -->
+    <div class="url-bar">
+      <div class="url-input-wrap">
+        <span class="url-icon">🔗</span>
+        <input
+          id="url-input"
+          type="url"
+          placeholder="Paste YouTube Live, Twitch, or direct .m3u8 URL here…"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="clear-btn" class="btn-icon" title="Clear" style="display:none">✕</button>
+      </div>
+      <button id="load-btn" class="btn-primary">
+        <span id="load-btn-text">Load Stream</span>
+        <span id="load-spinner" class="spinner" style="display:none"></span>
+      </button>
+      <button id="stop-btn" class="btn-stop" title="Stop stream and go back" style="display:none" onclick="stopStream()">&#9632; Stop</button>
+    </div>
+
+    <!-- Referer hint row (shown when stream URL is pasted) -->
+    <div id="referer-row" class="referer-row" style="display:none">
+      <span class="referer-icon">🔐</span>
+      <span class="referer-label">Stream requires auth — paste the <strong>page URL</strong> you found it on:</span>
+      <input id="referer-input" type="url" placeholder="https://the-site-you-were-watching.com/live" autocomplete="off" spellcheck="false" />
+      <button id="referer-clear" class="btn-icon" title="Clear" style="display:none">✕</button>
+    </div>
+
+    <!-- Error banner -->
+    <div id="error-banner" class="error-banner" style="display:none">
+      <span id="error-icon">⚠️</span>
+      <div>
+        <strong id="error-title">Error</strong>
+        <span id="error-msg"></span>
+      </div>
+      <button onclick="dismissError()" class="btn-icon">✕</button>
+    </div>
+
+    <!-- Main content: video + panels -->
+    <div id="main-content" class="main-content" style="display:none">
+
+      <!-- Left: Video player -->
+      <div class="player-col">
+        <div class="stream-title-bar">
+          <button id="back-btn" class="back-btn" onclick="backToReplays()" style="display:none">← Replays</button>
+          <span id="stream-title">Live Stream</span>
+          <span id="live-badge" class="live-badge">● LIVE</span>
+          <span id="replay-badge" class="live-badge replay-mode" style="display:none">🎬 REPLAY</span>
+          <div class="cast-wrap" style="position:relative;display:none" id="cast-wrap">
+            <button id="cast-btn" class="cast-btn" title="Cast to TV" onclick="toggleCastMenu()">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+                <path d="M1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm18-7H5c-1.1 0-2 .9-2 2v3h2v-3h14v10h-5v2h5c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2zM1 10v2c4.97 0 9 4.03 9 9h2c0-6.08-4.93-11-11-11z"/>
+              </svg>
+              <span class="cast-label">Cast</span>
+            </button>
+            <div id="cast-menu" class="cast-menu" style="display:none"></div>
+          </div>
+        </div>
+
+        <div class="video-wrap">
+          <video id="video" playsinline controls></video>
+          <div id="overlay-msg" class="overlay-msg" style="display:none">
+            <div class="overlay-spinner"></div>
+            <span id="overlay-text">Reconnecting…</span>
+          </div>
+        </div>
+
+        <!-- Deep diagnose panel -->
+        <div id="diagnose-panel" style="display:none"></div>
+
+        <!-- Quality selector -->
+        <div class="quality-bar">
+          <div class="quality-left">
+            <label>Quality</label>
+            <select id="quality-select">
+              <option value="-1">Auto (ABR)</option>
+            </select>
+          </div>
+          <div class="fix-toggles">
+            <label class="toggle-label" title="Lock quality when rapid switches detected">
+              <input type="checkbox" id="toggle-quality-lock" checked>
+              <span class="toggle-switch"></span>
+              Auto-lock quality
+            </label>
+            <label class="toggle-label" title="Boost buffer when freezes detected">
+              <input type="checkbox" id="toggle-buffer-boost" checked>
+              <span class="toggle-switch"></span>
+              Buffer boost
+            </label>
+            <label class="toggle-label" title="Auto-reconnect on error">
+              <input type="checkbox" id="toggle-auto-reconnect" checked>
+              <span class="toggle-switch"></span>
+              Auto-reconnect
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Diagnostics panels -->
+      <div class="diag-col">
+
+        <!-- Session health + active fixes -->
+        <div class="health-bar">
+          <div class="health-score" id="health-score">
+            <span class="health-grade" id="health-grade">–</span>
+            <span class="health-label">Stream Health</span>
+          </div>
+          <div class="active-fixes" id="active-fixes"></div>
+        </div>
+
+        <!-- Status cards -->
+        <div class="stat-cards">
+          <div class="stat-card" id="card-buffer">
+            <div class="stat-label">Buffer</div>
+            <div class="stat-value" id="val-buffer">–</div>
+            <div class="stat-unit">seconds ahead</div>
+            <div class="stat-bar"><div id="bar-buffer" class="stat-bar-fill"></div></div>
+          </div>
+          <div class="stat-card" id="card-quality">
+            <div class="stat-label">Quality</div>
+            <div class="stat-value" id="val-quality">–</div>
+            <div class="stat-unit" id="quality-unit">resolution</div>
+          </div>
+          <div class="stat-card" id="card-bandwidth">
+            <div class="stat-label">Bandwidth</div>
+            <div class="stat-value" id="val-bandwidth">–</div>
+            <div class="stat-unit">Mbps est.</div>
+          </div>
+          <div class="stat-card" id="card-latency">
+            <div class="stat-label">Seg Load</div>
+            <div class="stat-value" id="val-latency">–</div>
+            <div class="stat-unit">ms / segment</div>
+          </div>
+          <div class="stat-card" id="card-stalls">
+            <div class="stat-label">Stalls Fixed</div>
+            <div class="stat-value" id="val-stalls">0</div>
+            <div class="stat-unit" id="stall-unit">this session</div>
+          </div>
+          <div class="stat-card" id="card-edge">
+            <div class="stat-label">Live Edge</div>
+            <div class="stat-value" id="val-edge">–</div>
+            <div class="stat-unit">sec behind live</div>
+          </div>
+        </div>
+
+        <!-- Buffer chart -->
+        <div class="chart-card">
+          <div class="chart-title">Buffer Health (30s)</div>
+          <canvas id="buffer-chart" height="80"></canvas>
+        </div>
+
+        <!-- Bandwidth chart -->
+        <div class="chart-card">
+          <div class="chart-title">Bandwidth Estimate (30s)</div>
+          <canvas id="bw-chart" height="80"></canvas>
+        </div>
+
+        <!-- Event log / auto-fix log -->
+        <div class="log-card">
+          <div class="log-header">
+            <span class="chart-title">Auto-Fixes &amp; Events</span>
+            <button onclick="clearLog()" class="btn-sm">Clear</button>
+          </div>
+          <div id="event-log" class="event-log"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Landing state (no stream loaded) -->
+    <div id="landing" class="landing">
+      <div class="sports-hub">
+        <nav class="sport-tabs">
+          <button class="sport-tab active" data-sport="mma" onclick="switchSport('mma')">
+            <span class="sport-tab-icon">🥊</span>
+            <span class="sport-tab-label">MMA &amp; Boxing</span>
+          </button>
+          <button class="sport-tab" data-sport="football" onclick="switchSport('football')">
+            <span class="sport-tab-icon">⚽</span>
+            <span class="sport-tab-label">Soccer</span>
+          </button>
+          <button class="sport-tab" data-sport="afl" onclick="switchSport('afl')">
+            <span class="sport-tab-icon">🏉</span>
+            <span class="sport-tab-label">AFL</span>
+          </button>
+          <button class="sport-tab" data-sport="cricket" onclick="switchSport('cricket')">
+            <span class="sport-tab-icon">🏏</span>
+            <span class="sport-tab-label">Cricket</span>
+          </button>
+          <button class="sport-tab" data-sport="tennis" onclick="switchSport('tennis')">
+            <span class="sport-tab-icon">🎾</span>
+            <span class="sport-tab-label">Tennis</span>
+          </button>
+          <button class="sport-tab" data-sport="f1" onclick="switchSport('f1')">
+            <span class="sport-tab-icon">🏎️</span>
+            <span class="sport-tab-label">Formula 1</span>
+          </button>
+          <button class="sport-tab sport-tab-replays" data-sport="replays" onclick="switchSport('replays')">
+            <span class="sport-tab-icon">🎬</span>
+            <span class="sport-tab-label">Replays</span>
+          </button>
+          <button class="sport-refresh-btn" onclick="refreshCurrentSport()" title="Refresh">↻</button>
+        </nav>
+        <div id="sport-events-grid" class="events-grid">
+          <div class="fight-events-loading">Loading events…</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

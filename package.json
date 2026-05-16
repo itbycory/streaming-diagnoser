@@ -1,0 +1,59 @@
+{
+  "name": "streaming-diagnoser",
+  "version": "1.0.0",
+  "description": "Diagnose and auto-fix livestream issues (freezing, jitter, resolution changes)",
+  "main": "electron.js",
+  "scripts": {
+    "start": "node server.js",
+    "app": "electron .",
+    "build:win": "electron-builder --win --x64",
+    "install-yt-dlp": "pip3 install yt-dlp || pip install yt-dlp"
+  },
+  "dependencies": {
+    "castv2-client": "^1.2.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "multicast-dns": "^7.2.5",
+    "node-fetch": "^2.7.0",
+    "node-tls-client": "^2.1.0",
+    "puppeteer-core": "^24.40.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "electron": "^41.0.3",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.streamdiagnoser.app",
+    "productName": "Stream Diagnoser",
+    "asar": false,
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "files": [
+      "electron.js",
+      "server.js",
+      "public/**/*",
+      "node_modules/**/*",
+      "!node_modules/.cache/**/*",
+      "!node_modules/**/.github/**/*",
+      "!node_modules/**/test/**/*",
+      "!node_modules/**/tests/**/*",
+      "!node_modules/**/*.md",
+      "!node_modules/**/*.map",
+      "!node_modules/**/CHANGELOG*",
+      "!node_modules/**/LICENCE*",
+      "!node_modules/**/LICENSE*"
+    ]
+  }
+}

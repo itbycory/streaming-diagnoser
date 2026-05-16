@@ -1,0 +1,16 @@
+name: "Streaming Diagnoser"
+description: "Sports streaming hub — MMA, Soccer, AFL, Cricket, Tennis"
+version: "1.0.0"
+slug: "streaming_diagnoser"
+init: false
+arch:
+  - aarch64
+host_network: true
+ports:
+  3847/tcp: 3847
+ports_description:
+  3847/tcp: "Streaming Diagnoser Web UI"
+map:
+  - config:rw
+options: {}
+schema: {}

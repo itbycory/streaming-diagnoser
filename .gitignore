@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Secrets / local config (never commit API keys)
+config.json
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Electron build output
+dist/
+*.app/
+
+# Claude Code local settings
+.claude/settings.local.json
+.claude/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
