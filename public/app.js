@@ -1627,7 +1627,7 @@ let _allOneEvents    = [];
 let _openEventSlug   = null;
 
 const PROMOS = [
-  { id: 'ufc',      label: 'UFC',           endpoint: '/api/ufc-events',      isPPV: name => /UFC \d+/.test(name) },
+  { id: 'ufc',      label: 'UFC',           endpoint: '/api/ufc-events',      isPPV: name => /UFC \d+/.test(name), usePosters: true },
   { id: 'bellator', label: 'Bellator / PFL', endpoint: '/api/bellator-events', isPPV: name => /Bellator \d{3}/.test(name) },
   { id: 'one',      label: 'ONE',           endpoint: '/api/one-events',       isPPV: name => /ONE Fight Night/.test(name) },
   { id: 'boxing',   label: 'Boxing',        endpoint: null,                    isPPV: () => false },
@@ -1802,13 +1802,18 @@ async function playStreamSource(embedUrl, label, rowEl) {
 }
 
 function renderReplayList(events) {
+  const promo = PROMOS.find(p => p.id === _currentPromo);
+  if (promo?.usePosters) {
+    renderPosterGrid(events);
+    return;
+  }
+  // ── Text list (Bellator / ONE) ─────────────────────────────────────────────
   const c = document.getElementById('replay-list-container');
   if (!c) return;
   if (!events.length) {
     c.innerHTML = `<div class="fight-events-empty">No events match that search.</div>`;
     return;
   }
-  const promo = PROMOS.find(p => p.id === _currentPromo);
   c.innerHTML = `
     <div class="replay-list">
       ${events.map(ev => {
@@ -1825,6 +1830,124 @@ function renderReplayList(events) {
         <div class="replay-sources-panel" id="sources-${ev.slug}" style="display:none"></div>`;
       }).join('')}
     </div>`;
+}
+
+// ── Poster grid (UFC) ──────────────────────────────────────────────────────────
+
+function renderPosterGrid(events) {
+  const c = document.getElementById('replay-list-container');
+  if (!c) return;
+  if (!events.length) {
+    c.innerHTML = `<div class="fight-events-empty">No events match that search.</div>`;
+    return;
+  }
+  c.innerHTML = `
+    <div class="poster-grid" id="poster-grid">
+      ${events.map(ev => {
+        const year = new Date(ev.date).getFullYear();
+        const month = new Date(ev.date).toLocaleDateString('en-AU', { month: 'short' });
+        const subtitle = ev.name.replace(/^UFC\s+\d+:\s*/i, '').replace(/^UFC Fight Night:\s*/i, '').replace(/^UFC on \w+:\s*/i, '');
+        const isNumbered = ev.number !== null && ev.number !== undefined;
+        const safeSlug  = ev.slug.replace(/'/g, "\\'");
+        const safeName  = ev.name.replace(/'/g, "\\'");
+        const safeWiki  = (ev.wikiTitle || '').replace(/'/g, "\\'");
+        return `<div class="poster-card${_openEventSlug === ev.slug ? ' selected' : ''}"
+                     id="poster-${ev.slug}"
+                     onclick="openPosterEvent('${safeSlug}','${safeName}',${ev.date||0},'${safeWiki}')">
+          <div class="poster-img-wrap">
+            ${ev.posterUrl
+              ? `<img src="${ev.posterUrl}" loading="lazy" alt="${ev.name}" />`
+              : `<div class="poster-placeholder"><span>${isNumbered ? 'UFC ' + ev.number : 'UFC'}</span></div>`}
+            <div class="poster-hover-overlay">
+              <span class="poster-play-icon">▶</span>
+              <span class="poster-play-label">Fight Card</span>
+            </div>
+          </div>
+          <div class="poster-meta">
+            <span class="poster-meta-sub">${subtitle || ev.name}</span>
+            <span class="poster-meta-date">${month} ${year}</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div id="poster-fight-panel" class="poster-fight-panel" style="display:none"></div>`;
+
+  // Restore open state after re-render (e.g. after filter)
+  if (_openEventSlug) {
+    const ev = events.find(e => e.slug === _openEventSlug);
+    if (ev) _restorePosterPanel(ev);
+  }
+}
+
+async function openPosterEvent(slug, name, dateMs, wikiTitle) {
+  const panel = document.getElementById('poster-fight-panel');
+  if (!panel) return;
+
+  // Toggle off if same card clicked again
+  if (_openEventSlug === slug) {
+    document.querySelectorAll('.poster-card').forEach(c => c.classList.remove('selected'));
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    _openEventSlug = null;
+    _openFightIdx = null;
+    return;
+  }
+
+  _openEventSlug = slug;
+  _openFightIdx  = null;
+  document.querySelectorAll('.poster-card').forEach(c => c.classList.remove('selected'));
+  document.getElementById(`poster-${slug}`)?.classList.add('selected');
+
+  const ev = _promoCache(_currentPromo).find(e => e.slug === slug);
+  _showPosterPanel(panel, ev, name);
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  await _loadPosterFights(panel, name, dateMs, wikiTitle);
+}
+
+async function _restorePosterPanel(ev) {
+  const panel = document.getElementById('poster-fight-panel');
+  if (!panel) return;
+  document.getElementById(`poster-${ev.slug}`)?.classList.add('selected');
+  _showPosterPanel(panel, ev, ev.name);
+  await _loadPosterFights(panel, ev.name, ev.date, ev.wikiTitle);
+}
+
+function _showPosterPanel(panel, ev, name) {
+  const dateStr = ev ? new Date(ev.date).toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  panel.style.display = '';
+  panel.innerHTML = `
+    <div class="pfp-header">
+      ${ev?.posterUrl ? `<img class="pfp-thumb" src="${ev.posterUrl}" alt="${name}" />` : ''}
+      <div class="pfp-title-block">
+        <h3 class="pfp-name">${name}</h3>
+        <span class="pfp-date">${dateStr}</span>
+      </div>
+    </div>
+    <div class="pfp-body">
+      <div class="replay-sources-loading">
+        <span class="spinner" style="display:inline-block;width:14px;height:14px;border-width:2px;vertical-align:middle;margin-right:8px"></span>
+        Loading fight card…
+      </div>
+    </div>`;
+}
+
+async function _loadPosterFights(panel, name, dateMs, wikiTitle) {
+  try {
+    const wikiParam = wikiTitle ? `&wiki=${encodeURIComponent(wikiTitle)}` : '';
+    const dateParam = dateMs    ? `&date=${dateMs}` : '';
+    const result = await fetch(`/api/event-fights?q=${encodeURIComponent(name)}${dateParam}${wikiParam}`)
+      .then(r => r.json());
+    const body = panel.querySelector('.pfp-body');
+    if (!body) return;
+    if (result.type === 'fights' && result.fights?.length) {
+      renderFightList(result.fights, body);
+    } else {
+      body.innerHTML = `<div class="fight-events-empty" style="padding:20px 16px">No fight card found for this event yet.</div>`;
+    }
+  } catch (e) {
+    const body = panel.querySelector('.pfp-body');
+    if (body) body.innerHTML = `<div class="fight-events-empty" style="padding:20px 16px">Error: ${e.message}</div>`;
+  }
 }
 
 async function toggleReplaySources(slug, name, dateMs) {

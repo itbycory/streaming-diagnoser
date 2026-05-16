@@ -1593,3 +1593,177 @@ header {
   color: var(--text3);
   margin-top: 10px;
 }
+
+/* ===== Poster Grid (UFC Replays) ===== */
+
+.poster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+  padding: 4px 0 8px;
+}
+
+.poster-card {
+  cursor: pointer;
+  border-radius: 9px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  background: var(--bg3);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  display: flex;
+  flex-direction: column;
+}
+.poster-card:hover {
+  transform: translateY(-4px) scale(1.02);
+  border-color: var(--accent);
+  box-shadow: 0 10px 28px rgba(0,0,0,0.55);
+  z-index: 1;
+}
+.poster-card.selected {
+  border-color: var(--yellow);
+  box-shadow: 0 0 0 1px var(--yellow), 0 10px 28px rgba(0,0,0,0.55);
+}
+
+.poster-img-wrap {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  overflow: hidden;
+  background: var(--bg4);
+  flex-shrink: 0;
+}
+.poster-img-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.2s ease;
+}
+.poster-card:hover .poster-img-wrap img { transform: scale(1.04); }
+
+.poster-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--bg3), var(--bg4));
+}
+.poster-placeholder span {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text3);
+  text-align: center;
+  padding: 8px;
+}
+
+.poster-hover-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.72);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.poster-card:hover .poster-hover-overlay,
+.poster-card.selected .poster-hover-overlay { opacity: 1; }
+.poster-play-icon {
+  font-size: 22px;
+  color: #fff;
+  line-height: 1;
+}
+.poster-play-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--yellow);
+  padding: 3px 9px;
+  border-radius: 20px;
+  letter-spacing: 0.03em;
+}
+
+.poster-meta {
+  padding: 7px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.poster-meta-sub {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text2);
+  line-height: 1.3;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.poster-card.selected .poster-meta-sub { color: var(--yellow); }
+.poster-meta-date {
+  font-size: 9px;
+  color: var(--text3);
+  margin-top: 1px;
+}
+
+/* ── Poster fight panel (expands below grid) ─────────────────────────────── */
+
+.poster-fight-panel {
+  margin-top: 14px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  animation: pfp-slide-in 0.18s ease;
+}
+@keyframes pfp-slide-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.pfp-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+}
+.pfp-thumb {
+  width: 52px;
+  height: 78px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+}
+.pfp-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.pfp-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pfp-date {
+  font-size: 11px;
+  color: var(--text3);
+}
+.pfp-body {
+  padding: 4px 0;
+}
+
+@media (max-width: 600px) {
+  .poster-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 7px; }
+  .pfp-name { font-size: 13px; }
+}

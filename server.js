@@ -1534,6 +1534,7 @@ app.post('/api/scan-alt', async (req, res) => {
 // ─── Past events (for Replays tab) ───────────────────────────────────────────
 
 // ─── UFC event catalogue (ufcstats.com) ──────────────────────────────────────
+const POSTERS_INDEX_URL = 'https://raw.githubusercontent.com/itbycory/ufc-event-posters/main/index.json';
 let _ufcEventsCache = null;
 let _ufcEventsCacheTime = 0;
 
@@ -1543,27 +1544,21 @@ app.get('/api/ufc-events', async (req, res) => {
     return res.json(_ufcEventsCache);
   }
   try {
-    const html = await safeFetch(
-      'http://ufcstats.com/statistics/events/completed?page=all',
-      'http://ufcstats.com/'
-    );
-    if (!html) throw new Error('Empty response');
-
-    const events = [];
+    const raw = await safeFetch(POSTERS_INDEX_URL, 'https://github.com/');
+    if (!raw) throw new Error('Empty response from posters index');
+    const all = JSON.parse(raw);
     const now = Date.now();
-    // Parse table rows: each has a link (name) and a date span
-    const rowRe = /href="(http:\/\/ufcstats\.com\/event-details\/([^"]+))"[^>]*>\s*([^<]{4,80})\s*<\/a>[\s\S]{0,400}?<span[^>]*>\s*([A-Z][a-z]+ \d{1,2}, \d{4})\s*<\/span>/g;
-    let m;
-    while ((m = rowRe.exec(html)) !== null) {
-      const [, , slug, rawName, rawDate] = m;
-      const name = rawName.trim();
-      const dateMs = new Date(rawDate.trim()).getTime();
-      // Only past events (completed)
-      if (isNaN(dateMs) || dateMs > now) continue;
-      events.push({ slug, name, date: dateMs });
-    }
-    // Most recent first
-    events.sort((a, b) => b.date - a.date);
+    const events = all
+      .map(ev => ({
+        slug:      ev.id,
+        name:      ev.name,
+        date:      new Date(ev.date).getTime(),
+        posterUrl: ev.posterUrl,
+        wikiTitle: ev.wikiTitle,
+        number:    ev.number ?? null,
+      }))
+      .filter(ev => !isNaN(ev.date) && ev.date < now)  // past events only
+      .sort((a, b) => b.date - a.date);                // newest first
     _ufcEventsCache = events;
     _ufcEventsCacheTime = Date.now();
     res.json(events);
@@ -1891,19 +1886,21 @@ async function discoverEventFights(query, dateMs) {
 // Returns the full fight card for an event.
 // Priority: watchmmafull (individual fight pages, streamable now) > torrents (whole-event download)
 app.get('/api/event-fights', async (req, res) => {
-  const query  = req.query.q?.trim();
-  const dateMs = req.query.date ? parseInt(req.query.date) : null;
-  if (!query || !dateMs) return res.json({ type: 'empty' });
+  const query     = req.query.q?.trim();
+  const dateMs    = req.query.date ? parseInt(req.query.date) : null;
+  const wikiTitle = req.query.wiki?.trim(); // direct Wikipedia title from posters index
+  if (!query && !wikiTitle) return res.json({ type: 'empty' });
 
   try {
     // 1. Try watchmmafull (individual fight pages — works for ~last 1-2 years)
-    if (dateMs) {
+    if (dateMs && query) {
       const fights = await discoverEventFights(query, dateMs);
       if (fights.length > 0) return res.json({ type: 'fights', fights });
     }
 
-    // 2. Fall back to Wikipedia fight card (works for all numbered events)
-    const wikiFights = await discoverFightsFromWikipedia(query);
+    // 2. Wikipedia fight card — use wikiTitle directly if provided (more reliable),
+    //    otherwise fall back to deriving slug from the event name query.
+    const wikiFights = await discoverFightsFromWikipedia(wikiTitle || query);
     if (wikiFights.length > 0) return res.json({ type: 'fights', fights: wikiFights });
 
     return res.json({ type: 'empty' });
