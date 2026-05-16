@@ -2090,6 +2090,37 @@ app.get('/api/fight-events', async (req, res) => {
   }
 });
 
+// ─── Batch stream availability check ─────────────────────────────────────────
+// Returns { matchId: true/false } — true means at least one broadcaster is live.
+// Called after the event grid renders so cards can show accurate LIVE vs Pre-Match.
+app.get('/api/stream-status', async (req, res) => {
+  const ids = (req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 25);
+  if (!ids.length) return res.json({});
+
+  let matches;
+  try { matches = await fetchRawLiveMatches(); } catch { return res.json({}); }
+
+  const results = {};
+  await Promise.all(ids.map(async id => {
+    const match = matches.find(m => m.id === id);
+    if (!match?.sources?.length) { results[id] = false; return; }
+    // Check each source until one confirms a live stream
+    for (const src of match.sources) {
+      try {
+        const r = await fetch(`https://streamed.pk/api/stream/${src.source}/${src.id}`, {
+          headers: browserHeaders('https://stream-east.net/'), timeout: 5000,
+        });
+        if (!r.ok) continue;
+        const streams = await r.json();
+        if (Array.isArray(streams) && streams.length > 0) { results[id] = true; return; }
+      } catch {}
+    }
+    results[id] = false;
+  }));
+
+  res.json(results);
+});
+
 // ─── Local IP (for Chromecast — device can't reach localhost) ────────────────
 
 app.get('/api/local-ip', (req, res) => {

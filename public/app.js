@@ -1514,7 +1514,7 @@ async function loadSportEvents(sport) {
         ? `background-image: url('${ev.poster}'), ${gradient}`
         : `background: ${gradient}`;
       const liveBadge = ev.isLive
-        ? `<span class="event-live-badge">● LIVE</span>`
+        ? `<span class="event-live-badge" id="badge-${ev.id}">● LIVE</span>`
         : `<span class="event-time-badge">${timeStr}</span>`;
       const sportInfo = SPORT_LABELS[ev.sport] || SPORT_LABELS.other;
       const sportChip = showSportChip
@@ -1546,6 +1546,27 @@ async function loadSportEvents(sport) {
         body: JSON.stringify({ matchId: e.id }),
       }).catch(() => {});
     });
+
+    // Background stream-availability check — updates each card badge once results arrive
+    const liveIds = events.filter(e => e.isLive).map(e => e.id);
+    if (liveIds.length) {
+      fetch(`/api/stream-status?ids=${liveIds.map(encodeURIComponent).join(',')}`)
+        .then(r => r.json())
+        .then(status => {
+          for (const [id, hasStream] of Object.entries(status)) {
+            const badge = document.getElementById(`badge-${id}`);
+            if (!badge) continue;
+            if (hasStream) {
+              badge.className = 'event-live-badge';
+              badge.textContent = '● LIVE';
+            } else {
+              badge.className = 'event-prematch-badge';
+              badge.textContent = '⏳ Pre-Match';
+            }
+          }
+        })
+        .catch(() => {});
+    }
   } catch (e) {
     grid.innerHTML = `<div class="fight-events-empty">Could not load events: ${e.message}</div>`;
   }

@@ -1013,10 +1013,22 @@ header {
 
 /* Status badge row */
 .event-poster-badge-row {
+  margin-bottom: 4px;
+}
+.event-badge-row-inner {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.event-sport-chip {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
 }
 .event-live-badge {
   font-size: 10px;
@@ -1029,6 +1041,15 @@ header {
   animation: livePulse 2s infinite;
 }
 @keyframes livePulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+.event-prematch-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #000;
+  background: var(--yellow);
+  border-radius: 4px;
+  padding: 2px 7px;
+  letter-spacing: 0.4px;
+}
 .event-time-badge {
   font-size: 11px;
   color: rgba(255,255,255,0.75);
