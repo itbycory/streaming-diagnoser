@@ -3,6 +3,8 @@ let hls = null;
 let video = null;
 let statsInterval = null;
 let liveReloadTimer = null;
+let _discontinuityReloadTimer = null;
+let _lastFragCC = -1;
 let bufferHistory = [];
 let bwHistory = [];
 let bufferChart = null;
@@ -495,6 +497,7 @@ function startHLS(streamUrl) {
   }
 
   _silentRecoveryInProgress = false;
+  _lastFragCC = -1; // reset so first fragment doesn't trigger false discontinuity
   const hlsConfig = buildHlsConfig();
   hls = new Hls(hlsConfig);
 
@@ -538,8 +541,27 @@ function startHLS(streamUrl) {
     updateCard('card-latency', ms < 300 ? 'good' : ms < 800 ? 'warn' : 'bad');
   });
 
-  hls.on(Hls.Events.FRAG_BUFFERED, () => {
+  hls.on(Hls.Events.FRAG_BUFFERED, (event, data) => {
     updateBufferStats();
+    // Detect HLS discontinuities (ad breaks use #EXT-X-DISCONTINUITY which
+    // increments frag.cc). The ad stream often has a different audio sample
+    // rate (48kHz→44.1kHz or vice versa). When the main stream resumes,
+    // MSE's audio decoder is still configured for the ad's rate → audio
+    // plays at the wrong speed (deep/slow voices). Fix: reinit HLS after
+    // a short delay so we rejoin the live edge with a fresh audio pipeline.
+    const cc = data?.frag?.cc ?? 0;
+    if (_lastFragCC >= 0 && cc !== _lastFragCC && !_isReplayMode) {
+      log('warn', '📢', `Stream discontinuity (ad break?) — refreshing audio in 5s`);
+      clearTimeout(_discontinuityReloadTimer);
+      _discontinuityReloadTimer = setTimeout(() => {
+        if (!currentStreamInfo || !hls) return;
+        const url = currentStreamInfo.streamUrl;
+        log('info', '🔄', 'Post-discontinuity audio refresh');
+        stopCurrentStream();
+        setTimeout(() => startHLS(url), 300);
+      }, 5000);
+    }
+    _lastFragCC = cc;
   });
 
   hls.on(Hls.Events.ERROR, (event, data) => {
@@ -1120,6 +1142,7 @@ function stopStream() {
   if (video) { video.pause(); video.src = ''; video.load(); }
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (liveReloadTimer) { clearTimeout(liveReloadTimer); liveReloadTimer = null; }
+  if (_discontinuityReloadTimer) { clearTimeout(_discontinuityReloadTimer); _discontinuityReloadTimer = null; }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   currentStreamInfo = null;
   reconnectAttempts = 0;
@@ -1332,6 +1355,7 @@ function resetStats() {
 function stopCurrentStream() {
   clearInterval(statsInterval);
   clearTimeout(liveReloadTimer);
+  clearTimeout(_discontinuityReloadTimer);
   clearTimeout(reconnectTimer);
   if (hls) {
     hls.destroy();
