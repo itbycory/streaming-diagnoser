@@ -1367,7 +1367,35 @@ async function castToDevice(deviceId, deviceName) {
 
 // ===== Sports Hub =====
 
+const SPORT_LABELS = {
+  mma:        { label: 'MMA',       color: '#a855f7' },
+  football:   { label: 'Soccer',    color: '#22d07a' },
+  afl:        { label: 'AFL',       color: '#f5882a' },
+  cricket:    { label: 'Cricket',   color: '#4f8ef7' },
+  tennis:     { label: 'Tennis',    color: '#84cc16' },
+  f1:         { label: 'F1',        color: '#ef4444' },
+  motorsport: { label: 'Motorsport',color: '#ef4444' },
+  motogp:     { label: 'MotoGP',    color: '#f59e0b' },
+  basketball: { label: 'NBA',       color: '#f97316' },
+  baseball:   { label: 'MLB',       color: '#3b82f6' },
+  hockey:     { label: 'Hockey',    color: '#06b6d4' },
+  rugby:      { label: 'Rugby',     color: '#84cc16' },
+  other:      { label: 'Other',     color: '#6b7280' },
+};
+
 const SPORT_CONFIG = {
+  all: {
+    label: 'All Live',
+    empty: 'No live events right now.<br>Check back closer to event time.',
+    gradients: [
+      'linear-gradient(135deg, #0a0f1e 0%, #111827 40%, #060a14 100%)',
+      'linear-gradient(135deg, #0f0a1e 0%, #1a1040 40%, #080614 100%)',
+      'linear-gradient(135deg, #0a1628 0%, #0d2545 40%, #060e1a 100%)',
+      'linear-gradient(135deg, #1a0a2e 0%, #2d0a3d 40%, #0d0814 100%)',
+      'linear-gradient(135deg, #061a0a 0%, #0a3018 40%, #040e08 100%)',
+      'linear-gradient(135deg, #1a0500 0%, #3d0a00 40%, #0d0300 100%)',
+    ],
+  },
   mma: {
     label: 'MMA & Boxing',
     empty: 'No fight events found right now.<br>Check back closer to event time.',
@@ -1442,7 +1470,7 @@ const SPORT_CONFIG = {
   },
 };
 
-let _currentSport = 'mma';
+let _currentSport = 'all';
 
 function switchSport(sport) {
   _currentSport = sport;
@@ -1476,6 +1504,7 @@ async function loadSportEvents(sport) {
       return;
     }
     const now = Date.now();
+    const showSportChip = sport === 'all';
     grid.innerHTML = events.map((ev, i) => {
       const timeStr = _eventTimeStr(ev.date, now);
       const teamA = ev.teams?.home?.name;
@@ -1484,9 +1513,14 @@ async function loadSportEvents(sport) {
       const bgStyle = ev.poster
         ? `background-image: url('${ev.poster}'), ${gradient}`
         : `background: ${gradient}`;
-      const badgeRow = ev.isLive
+      const liveBadge = ev.isLive
         ? `<span class="event-live-badge">● LIVE</span>`
         : `<span class="event-time-badge">${timeStr}</span>`;
+      const sportInfo = SPORT_LABELS[ev.sport] || SPORT_LABELS.other;
+      const sportChip = showSportChip
+        ? `<span class="event-sport-chip" style="background:${sportInfo.color}22;color:${sportInfo.color};border-color:${sportInfo.color}44">${sportInfo.label}</span>`
+        : '';
+      const badgeRow = `<div class="event-badge-row-inner">${liveBadge}${sportChip}</div>`;
       const fighters = (teamA && teamB)
         ? `<div class="event-fighter-a">${teamA}</div>
            <div class="event-vs">VS</div>
@@ -1615,7 +1649,7 @@ function backToReplays() {
 }
 
 // Load MMA events on startup
-loadSportEvents('mma');
+loadSportEvents('all');
 
 // ===== Replays =====
 

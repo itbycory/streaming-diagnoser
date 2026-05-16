@@ -2007,12 +2007,28 @@ const SPORT_CATEGORIES = {
   f1:       'motorsport',
 };
 
-async function fetchSportEvents(sport) {
-  const category = SPORT_CATEGORIES[sport];
-  if (!category) throw new Error(`Unknown sport: ${sport}`);
+// Map raw API category strings to display sport keys (for 'all' tab labels)
+const CATEGORY_TO_SPORT = {
+  fight:          'mma',
+  football:       'football',
+  soccer:         'football',
+  afl:            'afl',
+  cricket:        'cricket',
+  tennis:         'tennis',
+  'motor-sports': 'motorsport',
+  motorsport:     'motorsport',
+  formula1:       'motorsport',
+  f1:             'motorsport',
+  motor:          'motorsport',
+  motogp:         'motogp',
+  moto:           'motogp',
+  basketball:     'basketball',
+  baseball:       'baseball',
+  hockey:         'hockey',
+  rugby:          'rugby',
+};
 
-  // Try backends in order — fall back to next if one is down
-  let matches = null;
+async function fetchRawLiveMatches() {
   for (const backend of STREAM_BACKENDS) {
     try {
       const r = await fetch(`${backend.base}/api/matches/live`, {
@@ -2021,29 +2037,39 @@ async function fetchSportEvents(sport) {
       });
       if (!r.ok) continue;
       const data = await r.json();
-      if (Array.isArray(data) && data.length > 0) { matches = data; break; }
+      if (Array.isArray(data) && data.length > 0) return data;
     } catch {}
   }
-  if (!matches) throw new Error('All stream backends unavailable');
-  const now = Date.now();
-  return matches
-    .filter(m => {
-      // MMA tab: show 'fight' category + 'other' (UFC/boxing events land here sometimes)
-      if (sport === 'mma') return m.category === 'fight' || m.category === 'other';
-      // F1 tab: catch motorsport / formula1 / f1 category names
-      if (sport === 'f1') return ['motorsport', 'formula1', 'f1', 'motor'].includes(m.category?.toLowerCase());
-      return m.category === category;
-    })
-    .map(m => ({
-      id: m.id,
-      title: m.title,
-      date: m.date,
-      isLive: true,   // /api/matches/live only returns live events
-      poster: m.poster || null,
-      teams: m.teams || null,
-      sources: (m.sources || []).map(s => s.source),
-    }))
-    .sort((a, b) => a.date - b.date);
+  throw new Error('All stream backends unavailable');
+}
+
+function mapMatch(m) {
+  return {
+    id: m.id,
+    title: m.title,
+    date: m.date,
+    isLive: true,
+    poster: m.poster || null,
+    teams: m.teams || null,
+    sources: (m.sources || []).map(s => s.source),
+    category: m.category || 'other',
+    sport: CATEGORY_TO_SPORT[m.category?.toLowerCase()] || m.category || 'other',
+  };
+}
+
+async function fetchSportEvents(sport) {
+  const matches = await fetchRawLiveMatches();
+
+  const filtered = matches.filter(m => {
+    if (sport === 'all') return true;
+    if (sport === 'mma') return m.category === 'fight';
+    if (sport === 'f1') return ['motor-sports', 'motorsport', 'formula1', 'f1', 'motor'].includes(m.category?.toLowerCase());
+    const category = SPORT_CATEGORIES[sport];
+    if (!category) return false;
+    return m.category === category;
+  });
+
+  return filtered.map(mapMatch).sort((a, b) => a.date - b.date);
 }
 
 app.get('/api/sport-events', async (req, res) => {
