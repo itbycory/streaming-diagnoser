@@ -1556,9 +1556,16 @@ app.get('/api/ufc-events', async (req, res) => {
         posterUrl: ev.posterUrl,
         wikiTitle: ev.wikiTitle,
         number:    ev.number ?? null,
+        upcoming:  new Date(ev.date).getTime() > now,
       }))
-      .filter(ev => !isNaN(ev.date) && ev.date < now)  // past events only
-      .sort((a, b) => b.date - a.date);                // newest first
+      .filter(ev => !isNaN(ev.date))
+      .sort((a, b) => {
+        // Upcoming events first (soonest at top), then past events newest-first
+        if (a.upcoming && !b.upcoming) return -1;
+        if (!a.upcoming && b.upcoming) return 1;
+        if (a.upcoming && b.upcoming) return a.date - b.date;  // soonest first
+        return b.date - a.date;                                 // most recent first
+      });
     _ufcEventsCache = events;
     _ufcEventsCacheTime = Date.now();
     res.json(events);

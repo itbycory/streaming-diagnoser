@@ -1844,28 +1844,32 @@ function renderPosterGrid(events) {
   c.innerHTML = `
     <div class="poster-grid" id="poster-grid">
       ${events.map(ev => {
-        const year = new Date(ev.date).getFullYear();
-        const month = new Date(ev.date).toLocaleDateString('en-AU', { month: 'short' });
-        const subtitle = ev.name.replace(/^UFC\s+\d+:\s*/i, '').replace(/^UFC Fight Night:\s*/i, '').replace(/^UFC on \w+:\s*/i, '');
+        const d       = new Date(ev.date);
+        const year    = d.getFullYear();
+        const month   = d.toLocaleDateString('en-AU', { month: 'short' });
+        const dayNum  = d.getDate();
+        const subtitle = ev.name.replace(/^UFC\s+\d+:\s*/i, '').replace(/^UFC Fight Night:\s*/i, '').replace(/^UFC on \w+:\s*/i, '').replace(/^UFC Freedom\s*/i, '');
         const isNumbered = ev.number !== null && ev.number !== undefined;
+        const isUpcoming = ev.upcoming === true;
         const safeSlug  = ev.slug.replace(/'/g, "\\'");
         const safeName  = ev.name.replace(/'/g, "\\'");
         const safeWiki  = (ev.wikiTitle || '').replace(/'/g, "\\'");
-        return `<div class="poster-card${_openEventSlug === ev.slug ? ' selected' : ''}"
+        return `<div class="poster-card${_openEventSlug === ev.slug ? ' selected' : ''}${isUpcoming ? ' upcoming' : ''}"
                      id="poster-${ev.slug}"
                      onclick="openPosterEvent('${safeSlug}','${safeName}',${ev.date||0},'${safeWiki}')">
           <div class="poster-img-wrap">
             ${ev.posterUrl
               ? `<img src="${ev.posterUrl}" loading="lazy" alt="${ev.name}" />`
               : `<div class="poster-placeholder"><span>${isNumbered ? 'UFC ' + ev.number : 'UFC'}</span></div>`}
+            ${isUpcoming ? `<div class="poster-upcoming-badge">UPCOMING</div>` : ''}
             <div class="poster-hover-overlay">
-              <span class="poster-play-icon">▶</span>
-              <span class="poster-play-label">Fight Card</span>
+              <span class="poster-play-icon">${isUpcoming ? '📋' : '▶'}</span>
+              <span class="poster-play-label">${isUpcoming ? 'Fight Card' : 'Fight Card'}</span>
             </div>
           </div>
           <div class="poster-meta">
             <span class="poster-meta-sub">${subtitle || ev.name}</span>
-            <span class="poster-meta-date">${month} ${year}</span>
+            <span class="poster-meta-date">${dayNum} ${month} ${year}</span>
           </div>
         </div>`;
       }).join('')}
