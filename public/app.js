@@ -2,6 +2,7 @@
 let hls = null;
 let video = null;
 let statsInterval = null;
+let driftWatchInterval = null;
 let bufferHistory = [];
 let bwHistory = [];
 let bufferChart = null;
@@ -561,10 +562,14 @@ function buildHlsConfig() {
     // Let ABR pick the starting quality based on bandwidth estimate — avoids the
     // initial blocky period when startLevel:0 forces lowest quality first
     startLevel: -1,
-    // Buffering — deep buffer absorbs proxy spikes without stalling
-    maxBufferLength: 90,
-    maxMaxBufferLength: 180,
-    maxBufferSize: 120 * 1000 * 1000,
+    // Move TS demuxing to a web worker — reduces main-thread jitter and gives
+    // more accurate PTS extraction, which prevents audio clock drift over time
+    enableWorker: true,
+    // Buffering — 45s is plenty to absorb proxy spikes without giving MSE so
+    // much accumulated state that audio PTS errors compound into audible drift
+    maxBufferLength: 45,
+    maxMaxBufferLength: 90,
+    maxBufferSize: 60 * 1000 * 1000,
     maxBufferHole: 1.0,
     highBufferWatchdogPeriod: 3,
     nudgeMaxRetry: 8,
@@ -572,7 +577,7 @@ function buildHlsConfig() {
     // ABR — conservative upgrades (proxy latency can look like bandwidth drop)
     // but fast enough that you land at a good quality quickly after start
     abrBandWidthFactor: 0.85,
-    abrBandWidthUpFactor: 0.65,   // slightly more aggressive than before
+    abrBandWidthUpFactor: 0.65,
     abrEwmaFastLive: 5,
     abrEwmaSlowLive: 12,
     capLevelToPlayerSize: true,
@@ -586,7 +591,7 @@ function buildHlsConfig() {
     levelLoadingTimeOut: 15000,
     fragLoadingTimeOut: 15000,
     // Live stream — stay 6 segments (~36s) behind live; absorbs proxy jitter
-    liveBackBufferLength: 60,
+    liveBackBufferLength: 30,
     liveSyncDurationCount: 6,
     liveMaxLatencyDurationCount: 12,
   };
@@ -964,6 +969,18 @@ function updateHealthScore() {
 function startStatsLoop() {
   clearInterval(statsInterval);
   statsInterval = setInterval(updateBufferStats, 1000);
+  // Playback-rate drift watchdog — live CDN streams can accumulate tiny PTS
+  // errors that cause the browser to subtly slow audio, making voices sound
+  // deep/distorted after 30-60 min. Check every 5s and snap back to 1.0.
+  clearInterval(driftWatchInterval);
+  driftWatchInterval = setInterval(() => {
+    if (!video || video.paused) return;
+    const rate = video.playbackRate;
+    if (Math.abs(rate - 1.0) > 0.02) {
+      log('warn', '🎵', `Audio drift corrected (rate was ${rate.toFixed(3)})`);
+      video.playbackRate = 1.0;
+    }
+  }, 5000);
 }
 
 function updateBufferStats() {
@@ -1089,6 +1106,7 @@ function stopStream() {
   if (hls) { hls.destroy(); hls = null; }
   if (video) { video.pause(); video.src = ''; video.load(); }
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+  if (driftWatchInterval) { clearInterval(driftWatchInterval); driftWatchInterval = null; }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   currentStreamInfo = null;
   reconnectAttempts = 0;
@@ -1300,6 +1318,7 @@ function resetStats() {
 
 function stopCurrentStream() {
   clearInterval(statsInterval);
+  clearInterval(driftWatchInterval);
   clearTimeout(reconnectTimer);
   if (hls) {
     hls.destroy();
