@@ -16,6 +16,7 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT = 5;
 let rescanAttempts = 0;
 const MAX_RESCAN = 2;
+let _silentRecoveryInProgress = false;
 
 // ── Replay state ──────────────────────────────────────────────────────────────
 let _isReplayMode = false;
@@ -177,6 +178,10 @@ window.addEventListener('DOMContentLoaded', () => {
         } else {
           document.exitFullscreen().catch(() => {});
         }
+        break;
+      case 'Escape':                       // Esc  →  stop stream, go home
+        e.preventDefault();
+        stopStream();
         break;
     }
   });
@@ -488,6 +493,7 @@ function startHLS(streamUrl) {
     return;
   }
 
+  _silentRecoveryInProgress = false;
   const hlsConfig = buildHlsConfig();
   hls = new Hls(hlsConfig);
 
@@ -498,7 +504,17 @@ function startHLS(streamUrl) {
   hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
     log('info', '📋', `Manifest parsed — ${data.levels.length} quality level(s)`);
     populateQualitySelect(data.levels);
-    video.play().catch(() => {});
+    video.muted = false;
+    video.play().catch(err => {
+      // Browser blocked autoplay with audio (user gesture too stale by now).
+      // Fall back to muted playback and show a one-click unmute prompt.
+      if (err.name === 'NotAllowedError') {
+        video.muted = true;
+        video.play().catch(() => {});
+        showUnmuteOverlay();
+        log('warn', '🔇', 'Autoplay blocked — playing muted, click to unmute');
+      }
+    });
     hideOverlay();
     renderActiveFixes();
   });
@@ -557,18 +573,18 @@ function buildHlsConfig() {
     // but fast enough that you land at a good quality quickly after start
     abrBandWidthFactor: 0.85,
     abrBandWidthUpFactor: 0.65,   // slightly more aggressive than before
-    abrEwmaFastLive: 4,
-    abrEwmaSlowLive: 10,
+    abrEwmaFastLive: 5,
+    abrEwmaSlowLive: 12,
     capLevelToPlayerSize: true,
     // Retry — proxy can be slow, give it time
     fragLoadingMaxRetry: 5,
     manifestLoadingMaxRetry: 4,
     levelLoadingMaxRetry: 4,
-    fragLoadingRetryDelay: 1000,
-    fragLoadingMaxRetryTimeout: 12000,
+    fragLoadingRetryDelay: 300,
+    fragLoadingMaxRetryTimeout: 5000,
     manifestLoadingTimeOut: 15000,
     levelLoadingTimeOut: 15000,
-    fragLoadingTimeOut: 35000,
+    fragLoadingTimeOut: 15000,
     // Live stream — stay 6 segments (~36s) behind live; absorbs proxy jitter
     liveBackBufferLength: 60,
     liveSyncDurationCount: 6,
@@ -829,6 +845,22 @@ function handleHlsError(data) {
           );
           return;
         }
+        // Transient network error — silent fast recovery.
+        // Tear down HLS without touching the video element so the buffer keeps
+        // playing, then restart immediately. No overlay, no reconnect counter.
+        // Only escalate to a visible reconnect if this silent attempt also fails.
+        if (!_silentRecoveryInProgress) {
+          _silentRecoveryInProgress = true;
+          log('fix', '🔄', 'Network hiccup — silently restarting…');
+          const savedInfo = currentStreamInfo;
+          if (hls) { hls.destroy(); hls = null; }
+          video.removeEventListener('waiting', onVideoWaiting);
+          video.removeEventListener('playing', onVideoPlaying);
+          video.removeEventListener('stalled', onVideoStalled);
+          setTimeout(() => { if (savedInfo) playStream(savedInfo); }, 100);
+          return;
+        }
+        // Silent recovery itself failed — escalate to visible reconnect
         attemptReconnect();
         break;
       case Hls.ErrorTypes.MEDIA_ERROR:
@@ -870,7 +902,7 @@ function attemptReconnect() {
     return;
   }
   reconnectAttempts++;
-  const delay = Math.min(2000 * reconnectAttempts, 15000);
+  const delay = Math.min(500 * reconnectAttempts, 8000);
   log('fix', '🔄', `Reconnecting in ${delay / 1000}s… (attempt ${reconnectAttempts}/${MAX_RECONNECT})`);
   showOverlay(`Reconnecting… (${reconnectAttempts}/${MAX_RECONNECT})`);
   activeFixes.reconnecting = true;
@@ -1111,6 +1143,22 @@ function hideOverlay() {
   overlayMsg.style.display = 'none';
 }
 
+function showUnmuteOverlay() {
+  let el = document.getElementById('unmute-overlay');
+  if (!el) return;
+  el.style.display = 'flex';
+}
+function hideUnmuteOverlay() {
+  const el = document.getElementById('unmute-overlay');
+  if (el) el.style.display = 'none';
+}
+function unmuteVideo() {
+  video.muted = false;
+  hideUnmuteOverlay();
+  // If paused (browser blocked even muted play), try playing now
+  if (video.paused) video.play().catch(() => {});
+}
+
 function showError(title, msg, hint) {
   errorTitle.textContent = title;
   errorMsg.textContent = (hint ? hint : msg);
@@ -1265,6 +1313,7 @@ function stopCurrentStream() {
     video.removeAttribute('src');
   }
   hideOverlay();
+  hideUnmuteOverlay();
 }
 
 // ===== Event Log =====
@@ -1486,9 +1535,60 @@ function switchSport(sport) {
   }
 }
 
+let _autoRefreshTimer = null;
+
+function _startAutoRefresh() {
+  if (_autoRefreshTimer) clearInterval(_autoRefreshTimer);
+  _autoRefreshTimer = setInterval(() => {
+    if (mainContent.style.display === 'none' && _currentSport !== 'replays') {
+      loadSportEvents(_currentSport);
+    }
+  }, 2 * 60 * 1000);
+}
+
 function refreshCurrentSport() {
   if (_currentSport === 'replays') loadReplays();
   else loadSportEvents(_currentSport);
+  _updateTabCounts();
+}
+
+function _updateGridHeader(count, sport) {
+  const countEl = document.getElementById('events-live-count');
+  const updatedEl = document.getElementById('events-updated-at');
+  if (countEl) {
+    countEl.textContent = count > 0
+      ? `${count} event${count !== 1 ? 's' : ''} live now`
+      : (sport === 'replays' ? '' : 'No live events');
+  }
+  if (updatedEl) {
+    const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    updatedEl.textContent = `Updated ${t}`;
+  }
+}
+
+async function _updateTabCounts() {
+  try {
+    const all = await fetch('/api/sport-events?sport=all').then(r => r.json());
+    if (!Array.isArray(all)) return;
+    const counts = {};
+    all.forEach(ev => { counts[ev.sport] = (counts[ev.sport] || 0) + 1; });
+    const total = all.length;
+    document.querySelectorAll('.sport-tab[data-sport]').forEach(tab => {
+      const s = tab.dataset.sport;
+      const n = s === 'all' ? total : (counts[s] || 0);
+      let badge = tab.querySelector('.sport-tab-count');
+      if (n > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'sport-tab-count';
+          tab.appendChild(badge);
+        }
+        badge.textContent = n;
+      } else if (badge) {
+        badge.remove();
+      }
+    });
+  } catch {}
 }
 
 async function loadSportEvents(sport) {
@@ -1499,6 +1599,7 @@ async function loadSportEvents(sport) {
   try {
     const events = await fetch(`/api/sport-events?sport=${sport}`).then(r => r.json());
     if (!events || events.error) throw new Error(events?.error || 'Unknown error');
+    _updateGridHeader(events.length, sport);
     if (!events.length) {
       grid.innerHTML = `<div class="fight-events-empty">${config.empty}</div>`;
       return;
@@ -1671,6 +1772,8 @@ function backToReplays() {
 
 // Load MMA events on startup
 loadSportEvents('all');
+_updateTabCounts();
+_startAutoRefresh();
 
 // ===== Replays =====
 
@@ -1703,6 +1806,7 @@ function _setPromoCache(id, data) {
 async function loadReplays() {
   const grid = document.getElementById('sport-events-grid');
   if (!grid) return;
+  _updateGridHeader(0, 'replays');
 
   const promoTabs = PROMOS.map(p => `
     <button class="promo-tab${p.id === _currentPromo ? ' active' : ''}"
