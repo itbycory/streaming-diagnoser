@@ -180,6 +180,21 @@ header {
 }
 .btn-sm:hover { color: var(--text); border-color: var(--text2); }
 
+.btn-fix-audio {
+  background: rgba(245, 197, 24, 0.15);
+  border: 1px solid rgba(245, 197, 24, 0.4);
+  color: #f5c518;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.btn-fix-audio:hover { background: rgba(245, 197, 24, 0.28); border-color: #f5c518; }
+.btn-fix-audio:active { transform: scale(0.97); }
+
 .spinner {
   width: 14px; height: 14px;
   border: 2px solid rgba(255,255,255,0.3);

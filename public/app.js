@@ -3,8 +3,9 @@ let hls = null;
 let video = null;
 let statsInterval = null;
 let liveReloadTimer = null;
-let _discontinuityReloadTimer = null;
+let _audioReinitTimer = null;   // covers all audio-fix triggers
 let _lastFragCC = -1;
+let _lastAudioSampleRate = null;
 let bufferHistory = [];
 let bwHistory = [];
 let bufferChart = null;
@@ -497,7 +498,8 @@ function startHLS(streamUrl) {
   }
 
   _silentRecoveryInProgress = false;
-  _lastFragCC = -1; // reset so first fragment doesn't trigger false discontinuity
+  _lastFragCC = -1;
+  _lastAudioSampleRate = null;
   const hlsConfig = buildHlsConfig();
   hls = new Hls(hlsConfig);
 
@@ -539,29 +541,35 @@ function startHLS(streamUrl) {
     const ms = data.stats.loading.end - data.stats.loading.start;
     document.getElementById('val-latency').textContent = ms.toFixed(0);
     updateCard('card-latency', ms < 300 ? 'good' : ms < 800 ? 'warn' : 'bad');
-  });
-
-  hls.on(Hls.Events.FRAG_BUFFERED, (event, data) => {
-    updateBufferStats();
-    // Detect HLS discontinuities (ad breaks use #EXT-X-DISCONTINUITY which
-    // increments frag.cc). The ad stream often has a different audio sample
-    // rate (48kHz→44.1kHz or vice versa). When the main stream resumes,
-    // MSE's audio decoder is still configured for the ad's rate → audio
-    // plays at the wrong speed (deep/slow voices). Fix: reinit HLS after
-    // a short delay so we rejoin the live edge with a fresh audio pipeline.
+    // Secondary detection: frag.cc increments at #EXT-X-DISCONTINUITY tags.
+    // Some streams DO use these; BUFFER_CODECS below catches the rest.
     const cc = data?.frag?.cc ?? 0;
     if (_lastFragCC >= 0 && cc !== _lastFragCC && !_isReplayMode) {
-      log('warn', '📢', `Stream discontinuity (ad break?) — refreshing audio in 5s`);
-      clearTimeout(_discontinuityReloadTimer);
-      _discontinuityReloadTimer = setTimeout(() => {
-        if (!currentStreamInfo || !hls) return;
-        const url = currentStreamInfo.streamUrl;
-        log('info', '🔄', 'Post-discontinuity audio refresh');
-        stopCurrentStream();
-        setTimeout(() => startHLS(url), 300);
-      }, 5000);
+      log('warn', '📢', `HLS discontinuity (cc ${_lastFragCC}→${cc}) — scheduling audio refresh`);
+      scheduleAudioReinit(3000);
     }
     _lastFragCC = cc;
+  });
+
+  // Primary detection: fires whenever HLS.js sees new codec info in the stream.
+  // SSAI (server-side ad insertion) changes the audio sample rate mid-stream
+  // WITHOUT #EXT-X-DISCONTINUITY tags — BUFFER_CODECS fires regardless.
+  // 48kHz main + 44.1kHz ad = 44100/48000 = 91.9% speed = deep voices.
+  hls.on(Hls.Events.BUFFER_CODECS, (event, data) => {
+    const sr = data.audio?.samplerate;
+    const codec = data.audio?.codec;
+    if (!sr) return;
+    if (_lastAudioSampleRate !== null && sr !== _lastAudioSampleRate) {
+      log('warn', '📢', `Audio sample rate changed ${_lastAudioSampleRate}Hz→${sr}Hz — refreshing`);
+      scheduleAudioReinit(2000);
+    } else if (_lastAudioSampleRate === null) {
+      log('info', '🔊', `Audio: ${codec || 'AAC'} @ ${sr}Hz`);
+    }
+    _lastAudioSampleRate = sr;
+  });
+
+  hls.on(Hls.Events.FRAG_BUFFERED, () => {
+    updateBufferStats();
   });
 
   hls.on(Hls.Events.ERROR, (event, data) => {
@@ -988,6 +996,21 @@ function updateHealthScore() {
   scoreEl.style.borderColor = color + '44';
 }
 
+// Shared audio reinit scheduler — debounced so rapid codec events don't
+// stack up multiple reloads. delayMs gives the stream a moment to settle
+// before we tear down (avoids reiniting mid-intro-frame of the ad).
+function scheduleAudioReinit(delayMs) {
+  if (_isReplayMode) return;
+  clearTimeout(_audioReinitTimer);
+  _audioReinitTimer = setTimeout(() => {
+    if (!currentStreamInfo || !hls) return;
+    const url = currentStreamInfo.streamUrl;
+    log('info', '🔄', 'Audio pipeline refresh (codec change detected)');
+    stopCurrentStream();
+    setTimeout(() => startHLS(url), 300);
+  }, delayMs);
+}
+
 // ===== Stats Loop =====
 function startStatsLoop() {
   clearInterval(statsInterval);
@@ -1002,7 +1025,7 @@ function startStatsLoop() {
 function startLiveReloadTimer() {
   clearTimeout(liveReloadTimer);
   if (_isReplayMode) return; // replays don't drift the same way
-  const INTERVAL_MS = 25 * 60 * 1000; // 25 minutes
+  const INTERVAL_MS = 8 * 60 * 1000; // 8 minutes — safety net for any drift not caught by codec events
   liveReloadTimer = setTimeout(() => {
     if (!currentStreamInfo || !hls || video?.paused) return;
     const url = currentStreamInfo.streamUrl;
@@ -1142,7 +1165,7 @@ function stopStream() {
   if (video) { video.pause(); video.src = ''; video.load(); }
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (liveReloadTimer) { clearTimeout(liveReloadTimer); liveReloadTimer = null; }
-  if (_discontinuityReloadTimer) { clearTimeout(_discontinuityReloadTimer); _discontinuityReloadTimer = null; }
+  if (_audioReinitTimer) { clearTimeout(_audioReinitTimer); _audioReinitTimer = null; }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   currentStreamInfo = null;
   reconnectAttempts = 0;
@@ -1211,6 +1234,11 @@ function unmuteVideo() {
   hideUnmuteOverlay();
   // If paused (browser blocked even muted play), try playing now
   if (video.paused) video.play().catch(() => {});
+}
+
+function fixAudio() {
+  if (!currentStreamInfo || !hls) return;
+  scheduleAudioReinit(0); // immediate
 }
 
 function showError(title, msg, hint) {
@@ -1355,7 +1383,7 @@ function resetStats() {
 function stopCurrentStream() {
   clearInterval(statsInterval);
   clearTimeout(liveReloadTimer);
-  clearTimeout(_discontinuityReloadTimer);
+  clearTimeout(_audioReinitTimer);
   clearTimeout(reconnectTimer);
   if (hls) {
     hls.destroy();
