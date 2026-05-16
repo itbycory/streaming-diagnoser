@@ -2,7 +2,7 @@
 let hls = null;
 let video = null;
 let statsInterval = null;
-let driftWatchInterval = null;
+let liveReloadTimer = null;
 let bufferHistory = [];
 let bwHistory = [];
 let bufferChart = null;
@@ -555,6 +555,7 @@ function startHLS(streamUrl) {
   hls.loadSource(streamUrl);
   hls.attachMedia(video);
   startStatsLoop();
+  startLiveReloadTimer();
 }
 
 function buildHlsConfig() {
@@ -565,11 +566,11 @@ function buildHlsConfig() {
     // Move TS demuxing to a web worker — reduces main-thread jitter and gives
     // more accurate PTS extraction, which prevents audio clock drift over time
     enableWorker: true,
-    // Buffering — 45s is plenty to absorb proxy spikes without giving MSE so
-    // much accumulated state that audio PTS errors compound into audible drift
-    maxBufferLength: 45,
-    maxMaxBufferLength: 90,
-    maxBufferSize: 60 * 1000 * 1000,
+    // Buffering — keep buffer modest so the MSE audio pipeline stays lean.
+    // 20s normal target + 45s max ceiling is plenty for proxy jitter absorption.
+    maxBufferLength: 20,
+    maxMaxBufferLength: 45,
+    maxBufferSize: 30 * 1000 * 1000,
     maxBufferHole: 1.0,
     highBufferWatchdogPeriod: 3,
     nudgeMaxRetry: 8,
@@ -969,18 +970,30 @@ function updateHealthScore() {
 function startStatsLoop() {
   clearInterval(statsInterval);
   statsInterval = setInterval(updateBufferStats, 1000);
-  // Playback-rate drift watchdog — live CDN streams can accumulate tiny PTS
-  // errors that cause the browser to subtly slow audio, making voices sound
-  // deep/distorted after 30-60 min. Check every 5s and snap back to 1.0.
-  clearInterval(driftWatchInterval);
-  driftWatchInterval = setInterval(() => {
-    if (!video || video.paused) return;
-    const rate = video.playbackRate;
-    if (Math.abs(rate - 1.0) > 0.02) {
-      log('warn', '🎵', `Audio drift corrected (rate was ${rate.toFixed(3)})`);
-      video.playbackRate = 1.0;
-    }
-  }, 5000);
+}
+
+// Schedules a seamless HLS reinit every 25 minutes for live streams.
+// The browser's AudioContext clock (driven by audio hardware) drifts from
+// wall-clock over long sessions — video.playbackRate stays 1.0 so JS can't
+// detect or correct it. A reinit tears down and recreates the entire audio
+// pipeline, which is exactly what a manual stream refresh does.
+function startLiveReloadTimer() {
+  clearTimeout(liveReloadTimer);
+  if (_isReplayMode) return; // replays don't drift the same way
+  const INTERVAL_MS = 25 * 60 * 1000; // 25 minutes
+  liveReloadTimer = setTimeout(() => {
+    if (!currentStreamInfo || !hls || video?.paused) return;
+    const url = currentStreamInfo.streamUrl;
+    log('info', '🔄', 'Scheduled audio refresh (prevents clock drift after long sessions)');
+    // Full teardown — removes all video event listeners, destroys HLS instance.
+    // stopCurrentStream() does NOT clear currentStreamInfo, so we can restart.
+    stopCurrentStream();
+    // Brief yield so MSE fully detaches before we reattach
+    setTimeout(() => {
+      startHLS(url);
+      // startHLS calls startStatsLoop + startLiveReloadTimer → chain continues
+    }, 300);
+  }, INTERVAL_MS);
 }
 
 function updateBufferStats() {
@@ -1106,7 +1119,7 @@ function stopStream() {
   if (hls) { hls.destroy(); hls = null; }
   if (video) { video.pause(); video.src = ''; video.load(); }
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
-  if (driftWatchInterval) { clearInterval(driftWatchInterval); driftWatchInterval = null; }
+  if (liveReloadTimer) { clearTimeout(liveReloadTimer); liveReloadTimer = null; }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   currentStreamInfo = null;
   reconnectAttempts = 0;
@@ -1318,7 +1331,7 @@ function resetStats() {
 
 function stopCurrentStream() {
   clearInterval(statsInterval);
-  clearInterval(driftWatchInterval);
+  clearTimeout(liveReloadTimer);
   clearTimeout(reconnectTimer);
   if (hls) {
     hls.destroy();
