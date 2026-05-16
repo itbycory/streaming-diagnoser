@@ -381,26 +381,59 @@ async function findFightOnYoutube(query) {
   return results.length > 0 ? results[0] : null;
 }
 
-// ─── Wikipedia fight card scraper ────────────────────────────────────────────
+// ─── Wikipedia fight card scraper (wikitext API) ─────────────────────────────
+// Uses {{MMAevent bout|WeightClass|Fighter1|def.|Fighter2|...}} template format
+// which is how all UFC event pages on Wikipedia are structured.
 
-function parseFightsFromWikipedia(html, eventContext) {
+// Split "A|B|[[C|D]]|E" by top-level pipes only (ignores pipes inside [[...]])
+function splitTemplateFields(str) {
+  const fields = [];
+  let depth = 0, cur = '';
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] === '[' && str[i + 1] === '[') { depth++; cur += '[['; i++; }
+    else if (str[i] === ']' && str[i + 1] === ']') { depth--; cur += ']]'; i++; }
+    else if (str[i] === '|' && depth === 0) { fields.push(cur.trim()); cur = ''; }
+    else cur += str[i];
+  }
+  if (cur.trim()) fields.push(cur.trim());
+  return fields;
+}
+
+function resolveWikiLink(raw) {
+  // Strip (c) champion marker first, then resolve [[Page|Display]] or [[Page]]
+  const cleaned = raw.replace(/\s*\(c\)\s*/gi, '').trim();
+  const m = cleaned.match(/\[\[([^\]|#]+?)(?:\|([^\]]*))?\]\]/);
+  if (m) return (m[2] || m[1]).replace(/_/g, ' ').trim();
+  return cleaned.replace(/_/g, ' ').trim();
+}
+
+// Non-fighter Wikipedia links that appear in weight class / notes columns
+const WIKI_NON_FIGHTER = /^(Heavyweight|Light Heavyweight|Middleweight|Welterweight|Lightweight|Featherweight|Bantamweight|Flyweight|Strawweight|Women|UFC|TBA|N\/A|Ultimate|Madison|New York|Performance|Fight of|Submission of|Decision|KO|TKO|Catchweight)/i;
+
+function parseFightsFromWikitext(wikitext, eventContext) {
   const fights = [];
-  const seen = new Set();
-  const text = html
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&#[0-9]+;/g, '').replace(/&[a-z]+;/g, ' ')
-    .replace(/\s+/g, ' ');
+  const seen   = new Set();
 
-  // Match "Firstname Lastname vs. Firstname Lastname" — both sides must be multi-word
-  const vsRe = /([A-Z][a-záéíóúñü'-]+(?:\s+[A-Z][a-záéíóúñü'-]+)+)\s+vs\.?\s+([A-Z][a-záéíóúñü'-]+(?:\s+[A-Z][a-záéíóúñü'-]+)+)/g;
+  // Match every {{MMAevent bout ...}} template — fields may be newline-separated.
+  // Use bracket-aware field splitter so pipes inside [[Link|Display]] don't break indexing.
+  const boutRe = /\{\{MMAevent bout[\s\S]*?\}\}/gi;
   let m;
-  while ((m = vsRe.exec(text)) !== null) {
-    const f1 = m[1].trim();
-    const f2 = m[2].trim();
-    if (f1.length < 4 || f2.length < 4) continue;
-    if (/^(The |This |See |From |In |For |No |At |An )/.test(f1)) continue;
+  while ((m = boutRe.exec(wikitext)) !== null) {
+    // Strip the template name, split on top-level pipes, drop empty leading field
+    const inner = m[0].replace(/^\{\{MMAevent bout\s*/i, '').replace(/\}\}$/, '');
+    // Fields: [0]=WeightClass [1]=Fighter1 [2]=def./vs./NC [3]=Fighter2 [4]=Method ...
+    const fields = splitTemplateFields(inner).filter(f => f.length > 0);
+    if (fields.length < 4) continue;
+
+    const f1 = resolveWikiLink(fields[1]);
+    const f2 = resolveWikiLink(fields[3]);
+
+    if (!f1 || !f2 || f1.length < 3 || f2.length < 3) continue;
+    if (WIKI_NON_FIGHTER.test(f1) || WIKI_NON_FIGHTER.test(f2)) continue;
+    // fields[2] should be the result verb — skip if it looks like more fighter data
+    const verb = fields[2]?.toLowerCase() || '';
+    if (!verb.includes('def') && !verb.includes('vs') && !verb.includes('nc') && !verb.includes('no contest')) continue;
+
     const key = [f1, f2].sort().join('|');
     if (!seen.has(key)) {
       seen.add(key);
@@ -412,12 +445,15 @@ function parseFightsFromWikipedia(html, eventContext) {
 }
 
 async function discoverFightsFromWikipedia(eventName) {
-  const wikiSlug = eventName.trim().replace(/\s+/g, '_').replace(/[^A-Za-z0-9_:.'-]/g, '');
-  const url = `https://en.wikipedia.org/wiki/${wikiSlug}`;
+  // Build the Wikipedia page slug — e.g. "UFC 309" → "UFC_309"
+  const slug = eventName.trim().replace(/\s+/g, '_').replace(/[^A-Za-z0-9_:.'-]/g, '');
+  const apiUrl = `https://en.wikipedia.org/w/api.php?action=parse&page=${encodeURIComponent(slug)}&prop=wikitext&format=json&formatversion=2`;
   try {
-    const html = await safeFetch(url, 'https://en.wikipedia.org/');
-    if (!html || html.length < 1000) return [];
-    return parseFightsFromWikipedia(html, eventName);
+    const raw = await safeFetch(apiUrl, 'https://en.wikipedia.org/');
+    if (!raw) return [];
+    const data = JSON.parse(raw);
+    if (data.error || !data.parse?.wikitext) return [];
+    return parseFightsFromWikitext(data.parse.wikitext, eventName);
   } catch { return []; }
 }
 
