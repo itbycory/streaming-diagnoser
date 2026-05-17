@@ -3,9 +3,10 @@ let hls = null;
 let video = null;
 let statsInterval = null;
 let liveReloadTimer = null;
-let _audioReinitTimer = null;   // covers all audio-fix triggers
+let _audioReinitTimer = null;
 let _lastFragCC = -1;
 let _lastAudioSampleRate = null;
+let _baselineAudioSampleRate = null;
 let bufferHistory = [];
 let bwHistory = [];
 let bufferChart = null;
@@ -500,6 +501,7 @@ function startHLS(streamUrl) {
   _silentRecoveryInProgress = false;
   _lastFragCC = -1;
   _lastAudioSampleRate = null;
+  _baselineAudioSampleRate = null;
   const hlsConfig = buildHlsConfig();
   hls = new Hls(hlsConfig);
 
@@ -541,31 +543,35 @@ function startHLS(streamUrl) {
     const ms = data.stats.loading.end - data.stats.loading.start;
     document.getElementById('val-latency').textContent = ms.toFixed(0);
     updateCard('card-latency', ms < 300 ? 'good' : ms < 800 ? 'warn' : 'bad');
-    // Secondary detection: frag.cc increments at #EXT-X-DISCONTINUITY tags.
-    // Some streams DO use these; BUFFER_CODECS below catches the rest.
-    const cc = data?.frag?.cc ?? 0;
-    if (_lastFragCC >= 0 && cc !== _lastFragCC && !_isReplayMode) {
-      log('warn', '📢', `HLS discontinuity (cc ${_lastFragCC}→${cc}) — scheduling audio refresh`);
-      scheduleAudioReinit(3000);
-    }
-    _lastFragCC = cc;
   });
 
-  // Primary detection: fires whenever HLS.js sees new codec info in the stream.
-  // SSAI (server-side ad insertion) changes the audio sample rate mid-stream
-  // WITHOUT #EXT-X-DISCONTINUITY tags — BUFFER_CODECS fires regardless.
-  // 48kHz main + 44.1kHz ad = 44100/48000 = 91.9% speed = deep voices.
+  // Detect audio sample rate changes caused by SSAI ad insertion.
+  // KEY INSIGHT: only reinit when returning TO the baseline rate (main content
+  // resuming), NOT when leaving it (ad starting). Reiniting into an ad gives
+  // the fresh decoder the wrong sample rate — making things worse, not better.
   hls.on(Hls.Events.BUFFER_CODECS, (event, data) => {
     const sr = data.audio?.samplerate;
     const codec = data.audio?.codec;
     if (!sr) return;
-    if (_lastAudioSampleRate !== null && sr !== _lastAudioSampleRate) {
-      log('warn', '📢', `Audio sample rate changed ${_lastAudioSampleRate}Hz→${sr}Hz — refreshing`);
-      scheduleAudioReinit(2000);
-    } else if (_lastAudioSampleRate === null) {
-      log('info', '🔊', `Audio: ${codec || 'AAC'} @ ${sr}Hz`);
+    if (_lastAudioSampleRate === null) {
+      // First codec seen — this is our baseline (main stream's sample rate)
+      _lastAudioSampleRate = sr;
+      log('info', '🔊', `Audio: ${codec || 'AAC'} @ ${sr}Hz (baseline)`);
+      return;
     }
+    if (sr === _lastAudioSampleRate) return; // no change
+    const prevSr = _lastAudioSampleRate;
     _lastAudioSampleRate = sr;
+    if (sr === _baselineAudioSampleRate) {
+      // Returning to baseline after an ad — main content is resuming NOW.
+      // Safe to reinit: the fresh decoder will see the correct sample rate.
+      log('warn', '📢', `Audio back to ${sr}Hz after ad — refreshing pipeline`);
+      scheduleAudioReinit(800);
+    } else {
+      // Leaving baseline (ad starting) — log only, do NOT reinit here.
+      // Reiniting now would give the fresh decoder the ad's wrong sample rate.
+      log('warn', '📢', `Audio: ${prevSr}Hz → ${sr}Hz (ad content, waiting for return)`);
+    }
   });
 
   hls.on(Hls.Events.FRAG_BUFFERED, () => {
@@ -585,7 +591,7 @@ function startHLS(streamUrl) {
   hls.loadSource(streamUrl);
   hls.attachMedia(video);
   startStatsLoop();
-  startLiveReloadTimer();
+
 }
 
 function buildHlsConfig() {
@@ -593,14 +599,10 @@ function buildHlsConfig() {
     // Let ABR pick the starting quality based on bandwidth estimate — avoids the
     // initial blocky period when startLevel:0 forces lowest quality first
     startLevel: -1,
-    // Move TS demuxing to a web worker — reduces main-thread jitter and gives
-    // more accurate PTS extraction, which prevents audio clock drift over time
-    enableWorker: true,
-    // Buffering — keep buffer modest so the MSE audio pipeline stays lean.
-    // 20s normal target + 45s max ceiling is plenty for proxy jitter absorption.
-    maxBufferLength: 20,
-    maxMaxBufferLength: 45,
-    maxBufferSize: 30 * 1000 * 1000,
+    // Buffering — deep buffer absorbs proxy spikes without stalling
+    maxBufferLength: 90,
+    maxMaxBufferLength: 180,
+    maxBufferSize: 120 * 1000 * 1000,
     maxBufferHole: 1.0,
     highBufferWatchdogPeriod: 3,
     nudgeMaxRetry: 8,
@@ -622,7 +624,7 @@ function buildHlsConfig() {
     levelLoadingTimeOut: 15000,
     fragLoadingTimeOut: 15000,
     // Live stream — stay 6 segments (~36s) behind live; absorbs proxy jitter
-    liveBackBufferLength: 30,
+    liveBackBufferLength: 60,
     liveSyncDurationCount: 6,
     liveMaxLatencyDurationCount: 12,
   };
@@ -997,15 +999,15 @@ function updateHealthScore() {
 }
 
 // Shared audio reinit scheduler — debounced so rapid codec events don't
-// stack up multiple reloads. delayMs gives the stream a moment to settle
-// before we tear down (avoids reiniting mid-intro-frame of the ad).
+// Debounced audio pipeline reinit — only called when we know we're back on
+// main content (baseline sample rate restored). Never called on a blind timer.
 function scheduleAudioReinit(delayMs) {
   if (_isReplayMode) return;
   clearTimeout(_audioReinitTimer);
   _audioReinitTimer = setTimeout(() => {
     if (!currentStreamInfo || !hls) return;
     const url = currentStreamInfo.streamUrl;
-    log('info', '🔄', 'Audio pipeline refresh (codec change detected)');
+    log('info', '🔄', 'Audio pipeline refresh');
     stopCurrentStream();
     setTimeout(() => startHLS(url), 300);
   }, delayMs);
@@ -1015,30 +1017,6 @@ function scheduleAudioReinit(delayMs) {
 function startStatsLoop() {
   clearInterval(statsInterval);
   statsInterval = setInterval(updateBufferStats, 1000);
-}
-
-// Schedules a seamless HLS reinit every 25 minutes for live streams.
-// The browser's AudioContext clock (driven by audio hardware) drifts from
-// wall-clock over long sessions — video.playbackRate stays 1.0 so JS can't
-// detect or correct it. A reinit tears down and recreates the entire audio
-// pipeline, which is exactly what a manual stream refresh does.
-function startLiveReloadTimer() {
-  clearTimeout(liveReloadTimer);
-  if (_isReplayMode) return; // replays don't drift the same way
-  const INTERVAL_MS = 8 * 60 * 1000; // 8 minutes — safety net for any drift not caught by codec events
-  liveReloadTimer = setTimeout(() => {
-    if (!currentStreamInfo || !hls || video?.paused) return;
-    const url = currentStreamInfo.streamUrl;
-    log('info', '🔄', 'Scheduled audio refresh (prevents clock drift after long sessions)');
-    // Full teardown — removes all video event listeners, destroys HLS instance.
-    // stopCurrentStream() does NOT clear currentStreamInfo, so we can restart.
-    stopCurrentStream();
-    // Brief yield so MSE fully detaches before we reattach
-    setTimeout(() => {
-      startHLS(url);
-      // startHLS calls startStatsLoop + startLiveReloadTimer → chain continues
-    }, 300);
-  }, INTERVAL_MS);
 }
 
 function updateBufferStats() {
@@ -1164,7 +1142,7 @@ function stopStream() {
   if (hls) { hls.destroy(); hls = null; }
   if (video) { video.pause(); video.src = ''; video.load(); }
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
-  if (liveReloadTimer) { clearTimeout(liveReloadTimer); liveReloadTimer = null; }
+
   if (_audioReinitTimer) { clearTimeout(_audioReinitTimer); _audioReinitTimer = null; }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   currentStreamInfo = null;
@@ -1382,7 +1360,7 @@ function resetStats() {
 
 function stopCurrentStream() {
   clearInterval(statsInterval);
-  clearTimeout(liveReloadTimer);
+
   clearTimeout(_audioReinitTimer);
   clearTimeout(reconnectTimer);
   if (hls) {
