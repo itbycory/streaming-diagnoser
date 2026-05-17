@@ -596,33 +596,30 @@ function startHLS(streamUrl) {
 
 function buildHlsConfig() {
   return {
-    // Let ABR pick the starting quality based on bandwidth estimate — avoids the
-    // initial blocky period when startLevel:0 forces lowest quality first
-    startLevel: -1,
+    startLevel: 0,               // start at lowest quality — ABR upgrades fast, avoids startup thrash
     // Buffering — deep buffer absorbs proxy spikes without stalling
     maxBufferLength: 90,
     maxMaxBufferLength: 180,
     maxBufferSize: 120 * 1000 * 1000,
-    maxBufferHole: 1.0,
+    maxBufferHole: 1.5,           // tolerate larger gaps — proxy timing variation is normal
     highBufferWatchdogPeriod: 3,
-    nudgeMaxRetry: 8,
+    nudgeMaxRetry: 6,
     startFragPrefetch: true,
-    // ABR — conservative upgrades (proxy latency can look like bandwidth drop)
-    // but fast enough that you land at a good quality quickly after start
+    // ABR — conservative to avoid quality thrashing through a proxy
     abrBandWidthFactor: 0.85,
-    abrBandWidthUpFactor: 0.65,
+    abrBandWidthUpFactor: 0.5,    // slow to upgrade — proxy latency can look like bandwidth drop
     abrEwmaFastLive: 5,
     abrEwmaSlowLive: 12,
     capLevelToPlayerSize: true,
-    // Retry — proxy can be slow, give it time
-    fragLoadingMaxRetry: 5,
+    // Retry — proxy + large 6.5MB TS segments need generous timeouts
+    fragLoadingMaxRetry: 4,
     manifestLoadingMaxRetry: 4,
     levelLoadingMaxRetry: 4,
-    fragLoadingRetryDelay: 300,
-    fragLoadingMaxRetryTimeout: 5000,
+    fragLoadingRetryDelay: 1200,  // wait between retries — avoids stampeding the proxy
+    fragLoadingMaxRetryTimeout: 10000,
     manifestLoadingTimeOut: 15000,
     levelLoadingTimeOut: 15000,
-    fragLoadingTimeOut: 15000,
+    fragLoadingTimeOut: 35000,    // large segments through Puppeteer proxy can take time
     // Live stream — stay 6 segments (~36s) behind live; absorbs proxy jitter
     liveBackBufferLength: 60,
     liveSyncDurationCount: 6,

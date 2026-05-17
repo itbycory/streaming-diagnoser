@@ -2368,9 +2368,8 @@ function triggerSegmentPrefetch(session, manifestText, baseUrl) {
   if (!session || !session.mainPage) return;
   const origin = (() => { try { return new URL(baseUrl).origin; } catch { return ''; } })();
   const lines = manifestText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-  // Pre-fetch the next 3 segments at live edge — enough to stay ahead without
-  // starving the primary stream when multiple sessions exist.
-  const liveEdge = lines.slice(-3);
+  // Pre-fetch the last 8 segments — matches the working Windows build config.
+  const liveEdge = lines.slice(-8);
   for (const line of liveEdge) {
     let abs;
     if (line.startsWith('http://') || line.startsWith('https://')) abs = line;
